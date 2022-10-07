@@ -5,16 +5,22 @@ import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
 
-SPECIAL_TOKENS = {
-    '<PAD>': 0,
-    '<START>': 1,
-    '<END>': 2,
-    '<UNK>': 3,
-    '<{>': 4,
-    '<}>': 5,
-    '<[>': 6,
-    '<]>': 7,
-}
+SPECIAL_TOKENS = [
+    '<PAD>',
+    '<START>',
+    '<END>',
+    '<UNK>'
+]
+
+VALUE_ARGUMENT_TOKENS = [
+    '<]>',
+    '<[>'
+]
+
+CONCEPT_ARGUMENT_TOKENS = [
+    '<}>',
+    '<{>'
+]
 
 CLEVR_DOUBLE_ARG_PRIMITIVES = [
     'equal_color',
@@ -40,27 +46,64 @@ class ProgramTokenizer:
     sos_token, sos_token_id = '<START>', 1  # Start of Sequence
     eos_token, eos_token_id = '<END>', 2    # End of Sequence
     unk_token, unk_token_id = '<UNK>', 3    # unknown token 
-    sca_token, sca_token_id = '<{>', 4     # concept-agnostic: start concept argument
-    eca_tokeb, eca_token_id = '<}>', 5    # concept-agnostic: end concept argument
-    sva_token, sva_token_id = '<[>', 6     # vocab-agnostic: start value argument
-    eva_tokeb, eva_token_id = '>]>', 7    # vocab-agnostic: end value argument
     start_exec_primitive = 'scene'
-    double_argument_nodes = CLEVR_DOUBLE_ARG_PRIMITIVES
+    double_argument_nodes = CLEVR_DOUBLE_ARG_PRIMITIVES#
+
+    def __init__(self, 
+                 vocab: Optional[Dict[str, int]] = None, 
+                 version: int = 0,
+                 reverse: bool = True
+    ):
+        if vocab is not None:
+            self.make_vocab(vocab)
+        
+        assert version in [0, 1, 2]
+        if version == 0:
+            self._tokenize = self.tokenize 
+
+        elif version == 1:
+            self._tokenize = self.tokenize_v1
+            self.special_tokens += VALUE_ARGUMENT_TOKENS
+            self.eva_token, self.sva_token = VALUE_ARGUMENT_TOKENS
+            self.sva_token_id = self.special_tokens.index(self.sva_token), 
+            self.eva_token_id = self.special_tokens.index(self.eva_token)
+
+        elif version == 2:
+            self._tokenize = self.tokenize_v2
+            self.special_tokens += VALUE_ARGUMENT_TOKENS + CONCEPT_ARGUMENT_TOKENS
+            self.eva_token, self.sva_token = VALUE_ARGUMENT_TOKENS
+            self.eca_token, self.sca_token = CONCEPT_ARGUMENT_TOKENS
+            self.sva_token_id = self.special_tokens.index(self.sva_token), 
+            self.eva_token_id = self.special_tokens.index(self.eva_token)
+            self.sca_token_id = self.special_tokens.index(self.sca_token), 
+            self.eca_token_id = self.special_tokens.index(self.eca_token)
+
+        self.version = version
+        self.reverse = reverse
     
     def make_vocab(self, vocab: Dict[str, int]):
         self.vocab = vocab 
         self.vocab_inv = {v:k for k, v in self.vocab.items()}
         self.vocab_size = len(self.vocab)
 
-    def make_from_dataset(self, programs: List[Program], reverse: bool = True) -> List[Tokens]:
-        tokens = self.preprocess_programs(programs, reverse=reverse)
+    def make_from_dataset(self, programs: List[Program]) -> List[Tokens]:
+        tokens = self.preprocess_programs(programs)
+
+        if self.version:
+            start_value, end_value = self.sva_token, self.eva_token
+            if self.reverse:
+                start_value, end_value = end_value, start_value
         
         all_tokens = set()
-        for t in tokens:
-            all_tokens = all_tokens.union(set(t))
+        for ts in tokens:
+            for i, t in enumerate(ts):
+                if self.version:
+                    if (i > 0 and ts[i - 1] == start_value) and (i+1 < len(ts) and ts[i+1] == end_value): 
+                        continue
+                all_tokens.add(t)
 
         prog_vocab = {
-            **self.special_tokens,
+            **{v: k for k, v in enumerate(self.special_tokens)},
             **{v: k + len(self.special_tokens) for k, v in enumerate(sorted(all_tokens))},
         }
 
@@ -77,17 +120,7 @@ class ProgramTokenizer:
     def _parse_value_from_str(self, node: str) -> Optional[str]:
         return None if len(node.split('[')) < 2 else node.split('[')[1].split(']')[0]
 
-    # def _parse_inputs_from_str(self, node: str) -> List[int]:
-    #     try:
-    #         return [] if '()' in node else list(map(int, node.split('(')[1].split(')')[0].split(',')))
-    #     except IndexError:
-    #         print(node)
-
     def _parse_inputs_from_str(self, node: str, step: int) -> List[int]:
-        # if '()' in node:
-        #     return []
-        # if node in self.double_argument_nodes:
-        #     return [step - 1, stack]
         if node == self.start_exec_primitive:
             return []
         # -1 represents the stack, from previous branch
@@ -103,16 +136,65 @@ class ProgramTokenizer:
             value_input=self._parse_value_from_str(node)
         )
 
+    def _convert_node_to_token(self, node: ProgramNode) -> str:
+        _concept = ("" if not node.concept_input else "{" + node.concept_input + "}")
+        _value = ("" if not node.value_input else "[" + node.value_input + "]")
+        return  node.function + _concept + _value
+
+    def _convert_to_v0(self, tokens: List[Tokens]) -> List[Tokens]:
+        def _convert(ts: Tokens) -> Tokens:
+            output_sequence = []
+            i=0
+            while i < len(ts):
+                token = ts[i]
+                if self.version == 2:
+                    if token == self.sca_token:
+                        _concept = '{' + ts[i+1] + '}'
+                        i += 3
+                if token == self.sva_token:
+                    _value = '[' + ts[i+1] + ']'
+                    i += 3
+                else:
+                    _concept, _value = '', ''
+                    i += 1
+                output_sequence.append(token + _concept + _value)
+            return output_sequence
+        return list(map(_convert, tokens))
+
     def tokenize(self, program: Program) -> Tokens:
-        return [
-                 node.function
-                 + ("" if not node.concept_input else "{" + node.concept_input + "}")
-                 + ("" if not node.value_input else "[" + node.value_input + "]")
-                 for node in program
-             ]
+        return list(map(self._convert_node_to_token, program))
+
+    def tokenize_v1(self, program: Program) -> Tokens:
+        output_sequence = []
+        for i, node in enumerate(program):
+            _concept = "" if not node.concept_input else "{" + node.concept_input + "}"
+            output_sequence.append(node.function + _concept)
+            if node.value_input is not None:
+                output_sequence.extend([self.sva_token, node.value_input, self.eva_token])
+        return output_sequence
+
+    def tokenize_v2(self, program: Program) -> Tokens:
+        output_sequence = []
+        for i, node in enumerate(program):
+            output_sequence.append(node.function) 
+            if node.concept_input is not None:
+                output_sequence.extend([self.sca_token, node.concept_input, self.eca_token])
+            if node.value_input is not None:
+                output_sequence.extend([self.sva_token, node.value_input, self.eva_token])
+        return output_sequence
 
     def convert_programs_to_tokens(self, programs: List[Program]) -> List[Tokens]:
-        return list(map(self.tokenize, programs))
+        return list(map(self._tokenize, programs))
+
+    def convert_tokens_to_programs(self, tokens: List[Tokens]) -> List[Program]:
+        tokens = self._convert_to_v0(tokens) if self.version else tokens
+        return [ 
+            [
+                 self._convert_token_to_node(token, i) 
+                 for i, token in enumerate(p)
+             ]
+             for p in tokens
+        ]
 
     def convert_tokens_to_ids(self, tokens: List[Tokens]) -> List[int]:
         return [ 
@@ -130,31 +212,22 @@ class ProgramTokenizer:
              for p in token_ids
         ]
 
-    def convert_tokens_to_programs(self, tokens: List[Tokens]) -> List[Program]:
+    def convert_ids_to_programs(self, token_ids: List[int]) -> List[Program]:
+        tokens = self.convert_ids_to_tokens(token_ids)
+        tokens = self._convert_to_v0(tokens) if self.version else tokens
         return [ 
             [
-                 self._convert_token_to_node(node, i) 
-                 for i, node in enumerate(p)
+                 self._convert_token_to_node(token, i)
+                 for i, token in enumerate(p)
              ]
              for p in tokens
         ]
 
-    def convert_ids_to_programs(self, token_ids: List[int]) -> List[Program]:
-        return [ 
-            [
-                 self._convert_token_to_node(self.vocab_inv[t], i)
-                 for i, t in enumerate(p)
-             ]
-             for p in token_ids
-        ]
-
     def convert_programs_to_ids(self, programs: List[Program]) -> List[int]:
+        tokens = self.convert_programs_to_tokens(programs)
         return [ 
             [
-                 self.vocab[node.function
-                 + ("" if not node.concept_input else "{" + node.concept_input + "}")
-                 + ("" if not node.value_input else "[" + node.value_input + "]")]
-                 for node in p
+                 self.vocab[token] for token in p
              ]
              for p in programs
         ]
@@ -173,26 +246,26 @@ class ProgramTokenizer:
                 programs[i] = p[:swap_id] + [p[-3]] + p[swap_id:-3] + p[-2:]
         return programs
 
-    def _reverse(self, programs: List[Tokens]) -> List[Tokens]:
-        return [p[::-1] for p in programs]
+    def _reverse(self, tokens: List[Tokens]) -> List[Tokens]:
+        return [ts[::-1] for ts in tokens]
 
-    def preprocess_programs(self, programs: List[Program], reverse: bool = True) -> List[Tokens]:
+    def preprocess_programs(self, programs: List[Program]) -> List[Tokens]:
         tokens = self._clevr_convert_to_chain(self.convert_programs_to_tokens(programs))
-        return self._reverse(tokens) if reverse else tokens
+        return self._reverse(tokens) if self.reverse else tokens
 
-    def preprocess_tokens(self, tokens: List[Tokens], reverse: bool = True) -> List[Tokens]:
+    def preprocess_tokens(self, tokens: List[Tokens]) -> List[Tokens]:
         tokens = self._clevr_convert_to_chain(tokens)
-        return self._reverse(tokens) if reverse else tokens
+        return self._reverse(tokens) if self.reverse else tokens
 
     def encode(self, tokens: Tokens, max_len: Optional[int] = None) -> Tensor:
         tokens = self.preprocess_tokens([tokens])[0]
         token_ids = torch.tensor(
-                [self.vocab["<START>"]]
+                [self.sos_token_id]
                 + [
-                    self.vocab[t] if t in self.vocab.keys() else self.vocab["<UNK>"]
+                    self.vocab[t] if t in self.vocab.keys() else self.unk_token_id
                     for t in tokens
                 ]
-                + [self.vocab["<END>"]],
+                + [self.eos_token_id],
                 dtype=torch.long
             )
         if max_len is not None:
@@ -206,12 +279,12 @@ class ProgramTokenizer:
         tokens = self.preprocess_tokens(tokens)
         token_ids = pad_sequence([
                 torch.tensor(
-                    [self.vocab["<START>"]]
+                    [self.sos_token_id]
                     + [
-                        self.vocab[t] if t in self.vocab.keys() else self.vocab["<UNK>"]
+                        self.vocab[t] if t in self.vocab.keys() else self.unk_token_id
                         for t in ts
                     ]
-                    + [self.vocab["<END>"]],
+                    + [self.eos_token_id],
                     dtype=torch.long,
                 )
                 for ts in tokens
@@ -225,12 +298,12 @@ class ProgramTokenizer:
     def encode_program(self, program: Program, max_len: Optional[int] = None) -> Tensor:
         tokens = self.preprocess_programs([program])[0]
         token_ids = torch.tensor(
-                [self.vocab["<START>"]]
+                [self.sos_token_id]
                 + [
-                    self.vocab[t] if t in self.vocab.keys() else self.vocab["<UNK>"]
+                    self.vocab[t] if t in self.vocab.keys() else self.unk_token_id
                     for t in tokens
                 ]
-                + [self.vocab["<END>"]],
+                + [self.eos_token_id],
                 dtype=torch.long
             )
         if max_len is not None:
@@ -244,12 +317,12 @@ class ProgramTokenizer:
         tokens = self.preprocess_programs(programs)
         token_ids = pad_sequence([
                 torch.tensor(
-                    [self.vocab["<START>"]]
+                    [self.sos_token_id]
                     + [
-                        self.vocab[t] if t in self.vocab.keys() else self.vocab["<UNK>"]
+                        self.vocab[t] if t in self.vocab.keys() else self.unk_token_id
                         for t in ts
                     ]
-                    + [self.vocab["<END>"]],
+                    + [self.eos_token_id],
                     dtype=torch.long,
                 )
                 for ts in tokens
@@ -270,7 +343,8 @@ class ProgramTokenizer:
         assert len(token_ids.shape) == 2
         # remove pad, start and end tokens and re-reverse
         eos_mask = (torch.where(token_ids == self.eos_token_id)[1] + 1).tolist()
-        token_ids = [toks[:idx][1:-1][::-1] for toks, idx in zip(token_ids.tolist(), eos_mask)]
+        token_ids = [toks[:idx][1:-1] for toks, idx in zip(token_ids.tolist(), eos_mask)]
+        token_ids = [toks[::-1] for toks in token_ids] if self.reverse else token_ids
         return self.convert_ids_to_tokens(token_ids)
 
     def decode_program(self, token_ids: Tensor) -> Program:
@@ -283,38 +357,6 @@ class ProgramTokenizer:
         assert len(token_ids.shape) == 2
         # remove pad, start and end tokens and re-reverse
         eos_mask = (torch.where(token_ids == self.eos_token_id)[1] + 1).tolist()
-        token_ids = [toks[:idx][1:-1][::-1] for toks, idx in zip(token_ids.tolist(), eos_mask)]
+        token_ids = [toks[:idx][1:-1] for toks, idx in zip(token_ids.tolist(), eos_mask)]
+        token_ids = [toks[::-1] for toks in token_ids] if self.reverse else token_ids
         return self.convert_ids_to_programs(token_ids)
-
-# def create_filter_dataset(programs: List[Program]):
-#     dataset = {}
-#     for pid, program in enumerate(programs):
-#         dataset[pid] = []
-#         ins, outs = [], []
-#         idx = 0
-#         previous = None
-#         continuing = False
-#         while idx < len(program):   
-#             node_type = program[idx]['type']
-#             if node_type == "scene":
-#                 if previous is not None:
-#                     dataset[pid].append(previous)
-#                 previous = None
-                
-#             elif node_type.startswith("filter"):
-#                 inp = program[idx]['value_inputs']
-#                 out = program[idx]['_output']
-
-#                 if previous is None:
-#                     continuing = True
-#                     previous = (inp, out)
-
-#                 else:
-#                     if continuing:
-#                         previous = (previous[0] + inp, out)
-#                     else:
-#                         dataset[pid].append(previous)
-#                         previous = None
-#             else:
-#                 continuing = False        
-#             idx += 1
