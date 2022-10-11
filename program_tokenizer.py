@@ -50,7 +50,7 @@ class ProgramTokenizer:
     double_argument_nodes = CLEVR_DOUBLE_ARG_PRIMITIVES#
 
     def __init__(self, 
-                 vocab: Optional[Dict[str, int]] = None, 
+                 vocab: Optional[Vocabulary] = None, 
                  version: int = 0,
                  reverse: bool = True
     ):
@@ -59,17 +59,17 @@ class ProgramTokenizer:
         
         assert version in [0, 1, 2]
         if version == 0:
-            self._tokenize = self.tokenize 
+            self.tokenize = self._tokenize 
 
         elif version == 1:
-            self._tokenize = self.tokenize_v1
+            self.tokenize = self._tokenize_v1
             self.special_tokens += VALUE_ARGUMENT_TOKENS
             self.eva_token, self.sva_token = VALUE_ARGUMENT_TOKENS
             self.sva_token_id = self.special_tokens.index(self.sva_token), 
             self.eva_token_id = self.special_tokens.index(self.eva_token)
 
         elif version == 2:
-            self._tokenize = self.tokenize_v2
+            self.tokenize = self._tokenize_v2
             self.special_tokens += VALUE_ARGUMENT_TOKENS + CONCEPT_ARGUMENT_TOKENS
             self.eva_token, self.sva_token = VALUE_ARGUMENT_TOKENS
             self.eca_token, self.sca_token = CONCEPT_ARGUMENT_TOKENS
@@ -81,7 +81,7 @@ class ProgramTokenizer:
         self.version = version
         self.reverse = reverse
     
-    def make_vocab(self, vocab: Dict[str, int]):
+    def make_vocab(self, vocab: Vocabulary):
         self.vocab = vocab 
         self.vocab_inv = {v:k for k, v in self.vocab.items()}
         self.vocab_size = len(self.vocab)
@@ -142,8 +142,10 @@ class ProgramTokenizer:
         return  node.function + _concept + _value
 
     def _convert_to_v0(self, tokens: List[Tokens]) -> List[Tokens]:
+        to_reverse = False
         if tokens[0][-2] == self.start_exec_primitive:
             # its reverse, change it
+            to_reverse = True
             tokens = self._reverse(tokens)
         def _convert(ts: Tokens) -> Tokens:
             output_sequence = []
@@ -161,13 +163,13 @@ class ProgramTokenizer:
                     continue
                 output_sequence.append(token)
                 i += 1
-            return output_sequence
+            return output_sequence if not to_reverse else self._reverse([output_sequence])[0]
         return list(map(_convert, tokens))
 
-    def tokenize(self, program: Program) -> Tokens:
+    def _tokenize(self, program: Program) -> Tokens:
         return list(map(self._convert_node_to_token, program))
 
-    def tokenize_v1(self, program: Program) -> Tokens:
+    def _tokenize_v1(self, program: Program) -> Tokens:
         output_sequence = []
         for i, node in enumerate(program):
             _concept = "" if not node.concept_input else "{" + node.concept_input + "}"
@@ -176,7 +178,7 @@ class ProgramTokenizer:
                 output_sequence.extend([self.sva_token, node.value_input, self.eva_token])
         return output_sequence
 
-    def tokenize_v2(self, program: Program) -> Tokens:
+    def _tokenize_v2(self, program: Program) -> Tokens:
         output_sequence = []
         for i, node in enumerate(program):
             output_sequence.append(node.function) 
@@ -187,7 +189,7 @@ class ProgramTokenizer:
         return output_sequence
 
     def convert_programs_to_tokens(self, programs: List[Program]) -> List[Tokens]:
-        return list(map(self._tokenize, programs))
+        return list(map(self.tokenize, programs))
 
     def convert_tokens_to_programs(self, tokens: List[Tokens]) -> List[Program]:
         tokens = self._convert_to_v0(tokens) if self.version else tokens
