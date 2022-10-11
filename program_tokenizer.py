@@ -142,6 +142,9 @@ class ProgramTokenizer:
         return  node.function + _concept + _value
 
     def _convert_to_v0(self, tokens: List[Tokens]) -> List[Tokens]:
+        if tokens[0][-2] == self.start_exec_primitive:
+            # its reverse, change it
+            tokens = self._reverse(tokens)
         def _convert(ts: Tokens) -> Tokens:
             output_sequence = []
             i=0
@@ -149,15 +152,15 @@ class ProgramTokenizer:
                 token = ts[i]
                 if self.version == 2:
                     if token == self.sca_token:
-                        _concept = '{' + ts[i+1] + '}'
+                        output_sequence[-1] += '{' + ts[i+1] + '}'
                         i += 3
+                        continue
                 if token == self.sva_token:
-                    _value = '[' + ts[i+1] + ']'
+                    output_sequence[-1] += '[' + ts[i+1] + ']'
                     i += 3
-                else:
-                    _concept, _value = '', ''
-                    i += 1
-                output_sequence.append(token + _concept + _value)
+                    continue
+                output_sequence.append(token)
+                i += 1
             return output_sequence
         return list(map(_convert, tokens))
 
