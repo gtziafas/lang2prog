@@ -41,7 +41,6 @@ Vocabulary = Dict[str, int]
 
 class ProgramTokenizer:
 
-    special_tokens = SPECIAL_TOKENS 
     pad_token, pad_token_id = '<PAD>', 0    # Padding
     sos_token, sos_token_id = '<START>', 1  # Start of Sequence
     eos_token, eos_token_id = '<END>', 2    # End of Sequence
@@ -59,18 +58,19 @@ class ProgramTokenizer:
         
         assert version in [0, 1, 2]
         if version == 0:
-            self.tokenize = self._tokenize 
+            self.tokenize = self._tokenize
+            self.special_tokens = SPECIAL_TOKENS
 
         elif version == 1:
             self.tokenize = self._tokenize_v1
-            self.special_tokens += VALUE_ARGUMENT_TOKENS
+            self.special_tokens = SPECIAL_TOKENS + VALUE_ARGUMENT_TOKENS
             self.eva_token, self.sva_token = VALUE_ARGUMENT_TOKENS
             self.sva_token_id = self.special_tokens.index(self.sva_token), 
             self.eva_token_id = self.special_tokens.index(self.eva_token)
 
         elif version == 2:
             self.tokenize = self._tokenize_v2
-            self.special_tokens += VALUE_ARGUMENT_TOKENS + CONCEPT_ARGUMENT_TOKENS
+            self.special_tokens = SPECIAL_TOKENS + VALUE_ARGUMENT_TOKENS + CONCEPT_ARGUMENT_TOKENS
             self.eva_token, self.sva_token = VALUE_ARGUMENT_TOKENS
             self.eca_token, self.sca_token = CONCEPT_ARGUMENT_TOKENS
             self.sva_token_id = self.special_tokens.index(self.sva_token), 
@@ -101,6 +101,7 @@ class ProgramTokenizer:
                     if (i > 0 and ts[i - 1] == start_value) and (i+1 < len(ts) and ts[i+1] == end_value): 
                         continue
                 all_tokens.add(t)
+        all_tokens = all_tokens.difference(set(self.special_tokens))
 
         prog_vocab = {
             **{v: k for k, v in enumerate(self.special_tokens)},
@@ -218,24 +219,10 @@ class ProgramTokenizer:
         ]
 
     def convert_ids_to_programs(self, token_ids: List[int]) -> List[Program]:
-        tokens = self.convert_ids_to_tokens(token_ids)
-        tokens = self._convert_to_v0(tokens) if self.version else tokens
-        return [ 
-            [
-                 self._convert_token_to_node(token, i)
-                 for i, token in enumerate(p)
-             ]
-             for p in tokens
-        ]
+        return self.convert_tokens_to_programs(self.convert_ids_to_tokens(token_ids))
 
     def convert_programs_to_ids(self, programs: List[Program]) -> List[int]:
-        tokens = self.convert_programs_to_tokens(programs)
-        return [ 
-            [
-                 self.vocab[token] for token in p
-             ]
-             for p in programs
-        ]
+        return self.convert_tokens_to_ids(self.convert_programs_to_tokens(programs))
 
     def _clevr_convert_to_chain(self, programs: List[Tokens]) -> List[Tokens]:
         # change the order of the functions so next step takes always input of previous step
@@ -295,7 +282,7 @@ class ProgramTokenizer:
                 for ts in tokens
             ], padding_value=self.pad_token_id, batch_first=True)
         if max_len is not None:
-            token_ids = pad_sequence(token_ids + [torch.empty(max_len, dtype=torch.long)],
+            token_ids = pad_sequence(list(token_ids) + [torch.empty(max_len, dtype=torch.long)],
                 padding_value=self.pad_token_id, batch_first=True)[:-1]
             assert token_ids.shape[0] == len(programs)
         return token_ids
