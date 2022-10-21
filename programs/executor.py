@@ -1,5 +1,6 @@
 from programs.metadata.clevr import *
 from utils import load_clevr_scenes
+from structs import * 
 
 import random 
 
@@ -17,7 +18,7 @@ class ClevrExecutor:
         self._register_modules()
 
         if dataset_cfg is not None:
-            self.scenes_dataset = {split: load_clevr_scenes(ds) for split, ds in dataset_cfg.items()}
+            self.scenes_dataset = dataset_cfg
     
     def run_dataset(self, program, image_index, split, *args, **kwargs):
         assert self.modules and self.scenes_dataset, 'Must define modules and set scenes dataset first'
@@ -82,13 +83,13 @@ class ClevrExecutor:
     def _register_modules(self):
         self.modules['count'] = self.count
         for attribute, attribute_values in self.attributes.items():
-            self.modules[f'equal_{attribute}'] = self.equal(attribute)
-            self.modules[f'query_{attribute}'] = self.query(attribute)
-            self.modules[f'same_{attribute}'] = self.same(attribute)
+            self.modules[f'equal{{{attribute}}}'] = self.equal(attribute)
+            self.modules[f'query{{{attribute}}}'] = self.query(attribute)
+            self.modules[f'same{{{attribute}}}'] = self.same(attribute)
             for value in attribute_values:
-                self.modules[f'filter_{attribute}[{value}]'] = self.filter(attribute, value)
+                self.modules[f'filter{{{attribute}}}[{value}]'] = self.filter(attribute, value)
         for relation in self.relations:
-            self.modules[f'relate[{relation}]'] = eval('self.relate_{relation}')
+            self.modules[f'relate[{relation}]'] = eval(f'self.relate_{relation}')
         self.modules['equal_integer'] = self.equal_integer
         self.modules['exist'] = self.exist
         self.modules['greater_than'] = self.greater_than
@@ -105,7 +106,7 @@ class ClevrExecutor:
     def equal(self, attribute):
         assert attribute in self.attributes.keys(), f'unknown attribute {attribute}'
         vocab = self.attributes[attribute]
-        def _equal(self, value1, value2):
+        def _equal(value1, value2):
             if type(value1) == str and value1 in vocab and type(value2) == str and value2 in vocab:
                 if value1 == value2:
                     return 'yes'
@@ -133,7 +134,7 @@ class ClevrExecutor:
     def filter(self, attribute, value):
         assert attribute in self.attributes.keys(), f'unknown attribute {attribute}'
         assert value in self.attributes[attribute], f'unknown concept {value}'
-        def _filter(self, scene, _):
+        def _filter(scene, _):
             if type(scene) == list:
                 output = []
                 for o in scene:
@@ -170,7 +171,7 @@ class ClevrExecutor:
     
     def query(self, attribute):
         assert attribute in self.attributes.keys(), f'unknown attribute {attribute}'
-        def _query(self, obj, _):
+        def _query(obj, _):
             if type(obj) == dict and attribute in obj:
                 return obj[attribute]
             return 'error'
@@ -214,7 +215,7 @@ class ClevrExecutor:
     
     def same(self, attribute):
         assert attribute in self.attributes.keys(), f'unknown attribute {attribute}'
-        def _same(self, obj, scene):
+        def _same(obj, scene):
             if type(obj) == dict and attribute in obj and type(scene) == list:
                 output = []
                 for o in scene:

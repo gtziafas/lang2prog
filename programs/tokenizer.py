@@ -1,4 +1,4 @@
-from typings import *
+from structs import *
 
 import torch
 import torch.nn.functional as F 
@@ -224,29 +224,14 @@ class ProgramTokenizer:
     def convert_programs_to_ids(self, programs: List[Program]) -> List[int]:
         return self.convert_tokens_to_ids(self.convert_programs_to_tokens(programs))
 
-    def _clevr_convert_to_chain(self, programs: List[Tokens]) -> List[Tokens]:
-        # change the order of the functions so next step takes always input of previous step
-        # except two-argument primitives, that will use a stack
-        # in CLEVR this can be fixed manually.
-        # @TODO: fix it for any given dataset using the inputs field to determine swap_id
-        programs = programs.copy()
-        query_fns = ['query{color}', 'query{shape}', 'query{size}' 'query{material}']
-        equal_fns = ['equal{color}', 'equal{shape}', 'equal{size}' 'equal{material}']
-        for i, p in enumerate(programs):
-            if p[-1] in equal_fns and (p[-2] == p[-3] and p[-2] in query_fns):
-                swap_id = p[1:].index('scene') + 1 
-                programs[i] = p[:swap_id] + [p[-3]] + p[swap_id:-3] + p[-2:]
-        return programs
-
     def _reverse(self, tokens: List[Tokens]) -> List[Tokens]:
         return [ts[::-1] for ts in tokens]
 
     def preprocess_programs(self, programs: List[Program]) -> List[Tokens]:
-        tokens = self._clevr_convert_to_chain(self.convert_programs_to_tokens(programs))
+        tokens = self.convert_programs_to_tokens(programs)
         return self._reverse(tokens) if self.reverse else tokens
 
     def preprocess_tokens(self, tokens: List[Tokens]) -> List[Tokens]:
-        tokens = self._clevr_convert_to_chain(tokens)
         return self._reverse(tokens) if self.reverse else tokens
 
     def encode(self, tokens: Tokens, max_len: Optional[int] = None) -> Tensor:

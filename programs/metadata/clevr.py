@@ -39,7 +39,8 @@ CLEVR_ANSWER_CANDIDATES = {
     'exist': ['yes', 'no'],
     'greater_than': ['yes', 'no'],
     'less_than': ['yes', 'no'],
-    'query': ATTRIBUTES,
+    'query': CLEVR_ATTRIBUTES,
     'same': ['yes', 'no']
 }
+
 
